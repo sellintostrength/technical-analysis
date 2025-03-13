@@ -1,0 +1,92 @@
+//@version=6
+indicator('Trailing StopLoss', overlay=true)
+
+// EMA
+ma(source, length, type) =>
+    type == "SMA" ? ta.sma(source, length) :
+     type == "EMA" ? ta.ema(source, length) :
+     type == "SMMA (RMA)" ? ta.rma(source, length) :
+     type == "WMA" ? ta.wma(source, length) :
+     type == "VWMA" ? ta.vwma(source, length) :
+     na
+
+show_ma   = input(true   , "EMA 96", inline="MA", display = display.data_window)
+ma_type   = input.string("EMA"  , ""     , inline="MA", options=["SMA", "EMA", "SMMA (RMA)", "WMA", "VWMA"])
+ma_source = input(hlc3  , ""     , inline="MA", display = display.data_window)
+ma_length = input.int(96     , ""     , inline="MA", minval=1)
+ma_color  = input(#b8b8b8, ""     , inline="MA", display = display.data_window)
+ema96 = ma(ma_source, ma_length, ma_type)
+plot(show_ma ? ema96 : na, color = ma_color, linewidth=2, title="EMA 96")
+
+// BB
+length = input.int(20, minval=1)
+maType = input.string("SMA", "Basis MA Type", options = ["SMA", "EMA", "SMMA (RMA)", "WMA", "VWMA"])
+src = input(close, title="Source")
+mult = input.float(2.0, minval=0.001, maxval=50, title="StdDev")
+
+basis = ma(src, length, maType)
+dev = mult * ta.stdev(src, length)
+upperBB = basis + dev
+lowerBB = basis - dev
+offset = input.int(0, "Offset", minval = -500, maxval = 500, display = display.data_window)
+p1 = plot(upperBB, linewidth=2, title= "Upper", color=#ffffff, offset = offset)
+p2 = plot(lowerBB, linewidth=2, title= "Lower", color=#ffffff, offset = offset)
+
+// ATR Trailing Stoploss
+Atr = input.int(defval=5, title='Atr Period', minval=1, maxval=500)
+Hhv = input.int(defval=10, title='HHV Period', minval=1, maxval=500)
+Mult = input.float(defval=2.5, title='Multiplier', minval=0.1)
+
+Prev = ta.highest(high - Mult * ta.atr(Atr), Hhv)
+cum_1 = ta.cum(1)
+highest_1 = ta.highest(high - Mult * ta.atr(Atr), Hhv)
+highest_2 = ta.highest(high - Mult * ta.atr(Atr), Hhv)
+iff_1 = close > highest_1 and close > close[1] ? highest_2 : Prev
+TS = cum_1 < 16 ? close : iff_1
+
+iff_2 = close < TS ? color.red : color.black
+Color = close > TS ? color.green : iff_2
+plot(TS, color=Color, linewidth=2, title='ATR Trailing Stoploss')
+
+// MFI
+mfiValue = ta.mfi(hlc3, 14)
+Buy = ta.crossover(close, TS) and (mfiValue < 25)
+
+// 상태 변수
+var float entryPrice = na
+var bool inTrade = false
+var int buyBar = na  // Buy 발생한 바의 인덱스 저장
+
+// Buy 발생 시 진입 상태 변경
+if Buy
+    entryPrice := close
+    inTrade := true
+    buyBar := bar_index  // 현재 바 인덱스 저장
+
+// Sell 조건 계산
+mfiBBBasis = ta.sma(mfiValue, 14)
+mfiBBDev = 2.2 * ta.stdev(mfiValue, 14)
+mfiBBUpper = mfiBBBasis + mfiBBDev
+
+// Sell 조건 수정: crossover 함수가 올바르게 작동하도록 float 타입 적용
+Sell = inTrade and (ta.crossover(float(hlc3), float(ema96)) or ta.crossover(float(close), float(upperBB)) or ta.crossover(float(mfiValue), float(mfiBBUpper)))
+
+// Sell 발생 시 상태 변경
+if Sell
+    inTrade := false
+
+// Stoploss: Buy 발생 후 3캔들 이후부터 TS 도달 시 강제 청산
+Stoploss = inTrade and (na(buyBar) and bar_index > buyBar + 3) and close < TS
+
+if Stoploss
+    inTrade := false
+
+// 시각적 표시
+plotshape(Buy, 'Long', shape.labelup, location.belowbar, #81c784, text='Open', textcolor=color.new(color.black, 0))
+plotshape(Sell, 'Close', shape.labeldown, location.abovebar, #f77c80, text='Close', textcolor=color.new(color.black, 0))
+plotshape(Stoploss, 'Stoploss', shape.cross, location.abovebar, #fff176, text='SL', textcolor=color.new(color.white, 0))
+
+// 알람 설정
+alertcondition(Buy, 'Buy Signal', 'Open Long')
+alertcondition(Sell, 'Sell Signal', 'Close Long')
+alertcondition(Stoploss, 'Stoploss Triggered', 'Exit due to Stoploss')
